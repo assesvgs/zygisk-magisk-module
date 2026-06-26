@@ -1,0 +1,9 @@
+type zygisk_file file_type
+typeattribute zygisk_file mlstrustedobject
+allow * zygisk_file file *
+allow * zygisk_file dir *
+allow * zygisk_file fifo_file *
+allow zygote zygote:process execmem
+allow zygote fs_type:filesystem unmount
+allow system_server system_server:process execmem
+allow zygote tmpfs:file { open read write map }

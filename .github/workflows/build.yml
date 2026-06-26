@@ -1,0 +1,85 @@
+name: Build
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - abi: arm64-v8a
+            rust_target: aarch64-linux-android
+            triple: aarch64-linux-android26
+          - abi: armeabi-v7a
+            rust_target: armv7-linux-androideabi
+            triple: armv7a-linux-androideabi26
+          - abi: x86_64
+            rust_target: x86_64-linux-android
+            triple: x86_64-linux-android26
+          - abi: x86
+            rust_target: i686-linux-android
+            triple: i686-linux-android26
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch module.prop with commit SHA
+        run: |
+          SHA=${GITHUB_SHA::7}
+          echo "SHORT_SHA=$SHA" >> $GITHUB_ENV
+          sed -i '' "s/^version=.*/version=30.7 (module) | $SHA/" module/module.prop
+          sed -i '' "s/^versionCode=.*/versionCode=$(date +%Y%m%d)$SHA/" module/module.prop
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.rust_target }}
+      - name: Build zygiskd
+        run: |
+          TC=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64
+          mkdir -p .cargo
+          cat > .cargo/config.toml << END
+          [target.${{ matrix.rust_target }}]
+          linker = "$TC/bin/${{ matrix.triple }}-clang"
+          END
+          cargo build --target ${{ matrix.rust_target }} --release --manifest-path src/zygiskd/Cargo.toml
+          mkdir -p module/bin/${{ matrix.abi }}
+          Z_BIN=$(find target src -name zygiskd -type f 2>/dev/null | head -1)
+          if [ -n "$Z_BIN" ]; then
+            cp "$Z_BIN" module/bin/${{ matrix.abi }}/zygiskd
+          else
+            echo "ERROR: zygiskd binary not found"
+            exit 1
+          fi
+      - name: Build libzygisk.so
+        run: |
+          mkdir -p build/libzygisk_${{ matrix.abi }}
+          cmake -S src/libzygisk -B build/libzygisk_${{ matrix.abi }} \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=26
+          cmake --build build/libzygisk_${{ matrix.abi }} --config Release
+          mkdir -p module/lib/${{ matrix.abi }}
+          cp build/libzygisk_${{ matrix.abi }}/libzygisk.so module/lib/${{ matrix.abi }}/libzygisk.so
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: zygisk-module-${{ matrix.abi }}-${{ env.SHORT_SHA }}
+          path: module/
+  package:
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set SHORT_SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: zygisk-module-*
+          path: dist/
+      - run: |
+          mkdir -p module/bin
+          for d in dist/*/; do cp -r "$d"/* module/ 2>/dev/null || true; done
+          chmod +x module/bin/*/zygiskd 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zygisk-module-${{ env.SHORT_SHA }}
+          path: module

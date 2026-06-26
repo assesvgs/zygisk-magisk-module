@@ -1,0 +1,7 @@
+id=zygisk
+name=Zygisk Module
+version=30.7 (module)
+versionCode=307001
+author=Magisk Project
+description=Zygisk implementation as standalone Magisk module
+# version is patched by CI with commit SHA
